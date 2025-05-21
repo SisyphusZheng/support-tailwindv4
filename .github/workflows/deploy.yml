@@ -31,6 +31,6 @@ jobs:
         with:
           project: "fresh-tailwind-test"
           entrypoint: "./www/main.tsx"
-          root: "./www"
+          root: "."
           
           
