@@ -1,4 +1,4 @@
-import { type ComponentChildren, h } from "preact";
+import type { ComponentChildren } from "preact";
 import {
   CLIENT_NAV_ATTR,
   DATA_ANCESTOR,
@@ -453,12 +453,12 @@ function revivePartials(
           sib as Comment,
         );
 
-        const root = h(PartialComp, {
-          key: partialKey !== "" ? partialKey : undefined,
-          name: partialName,
-          mode: partialMode,
-          children: null,
-        });
+        const root = <PartialComp
+          key={partialKey !== "" ? partialKey : undefined}
+          name={partialName}
+          mode={partialMode}
+          children={null}
+        />;
         domToVNode(
           allProps,
           [root],

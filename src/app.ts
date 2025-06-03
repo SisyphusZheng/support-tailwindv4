@@ -1,5 +1,5 @@
-import { type ComponentType, h } from "preact";
-import { renderToString } from "preact-render-to-string";
+import type { ComponentType } from "preact";
+import { renderToString } from "npm:preact-render-to-string";
 import { trace } from "@opentelemetry/api";
 
 import { DENO_DEPLOYMENT_ID } from "./runtime/build_id.ts";
@@ -344,7 +344,7 @@ const missingBuildHandler = async (): Promise<Response> => {
   headers.set("Content-Type", "text/html; charset=utf-8");
 
   const html = DENO_DEPLOYMENT_ID
-    ? renderToString(h(FinishSetup, null))
-    : renderToString(h(ForgotBuild, null));
+    ? renderToString(<FinishSetup />)
+    : renderToString(<ForgotBuild />);
   return new Response(html, { headers, status: 500 });
 };

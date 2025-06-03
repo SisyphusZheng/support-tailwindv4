@@ -2,8 +2,6 @@ import {
   Component,
   type ComponentChildren,
   type ComponentType,
-  Fragment,
-  h,
   render,
   type VNode,
 } from "preact";
@@ -83,7 +81,8 @@ export function revive(
       if (isSlotRef(value)) {
         const marker = slots.get(value.id);
         if (marker !== undefined) {
-          const root = h(Fragment, null);
+          // 直接用空 fragment
+          const root = <></>;
           const slotContainer = createRootFragment(
             container,
             marker.start,
@@ -102,18 +101,17 @@ export function revive(
             `#frsh-${value.id}-${value.name}`,
           ) as HTMLTemplateElement | null;
           if (template !== null) {
-            const root = h(Fragment, null);
+            const root = <></>;
             domToVNode(allProps, [root], [Marker.Slot], template.content, null);
             props[propName] = root;
           }
         }
       }
     }
-
     // TODO: explore hydrate?
-    render(h(component, props), container as unknown as HTMLElement);
+    const Component = component;
+    render(<Component {...props} />, container as unknown as HTMLElement);
   };
-
   // deno-lint-ignore no-window
   "scheduler" in window
     // `scheduler.postTask` is async but that can easily
@@ -162,29 +160,24 @@ export function boot(
 
   for (let i = 0; i < ctx.roots.length; i++) {
     const root = ctx.roots[i];
-
     const container = createRootFragment(
       // deno-lint-ignore no-explicit-any
       root.start.parentNode as any,
       root.start,
       root.end!,
     );
-
     if (root.kind === RootKind.Island) {
       const props = allProps[root.propsIdx].props;
       const component = ISLAND_REGISTRY.get(root.name)!;
-
       revive(props, component, container, ctx.slots, allProps);
     } else if (root.kind === RootKind.Partial) {
       const props: Record<string, unknown> = {
         name: root.name,
         children: null,
       };
-
-      const domRoot = h(Fragment, null);
+      const domRoot = <></>;
       domToVNode(allProps, [domRoot], [Marker.Partial], container, root.end!);
       props.children = domRoot.props.children;
-
       // deno-lint-ignore no-explicit-any
       revive(props, PartialComp as any, container, ctx.slots, allProps);
     }
@@ -350,20 +343,19 @@ export function domToVNode(
             ? true
             : attr.nodeValue;
       }
-
-      const vnode = h(sib.localName, props);
+      // 用 JSX 语法动态标签
+      const Tag = sib.localName as any;
+      const vnode = <Tag {...props} />;
       const marker = markerStack.at(-1);
       const appendVNode = marker === Marker.Slot || marker === Marker.Partial;
       if (appendVNode) {
         addVNodeChild(vnodeStack.at(-1)!, vnode);
         vnodeStack.push(vnode);
       }
-
       const firstChild = sib.firstChild;
       if (firstChild !== null) {
         domToVNode(allProps, vnodeStack, markerStack, firstChild, end);
       }
-
       if (appendVNode) {
         vnodeStack.pop();
       }
@@ -388,8 +380,8 @@ export function domToVNode(
           const props = allProps[+propsIdx].props;
           props.key = key === "" ? undefined : key;
 
-          // deno-lint-ignore no-explicit-any
-          const islandVNode = h<any>(island, props);
+          const IslandComp = island as any;
+          const islandVNode = <IslandComp {...props} />;
           addVNodeChild(vnodeStack.at(-1)!, islandVNode);
           vnodeStack.push(islandVNode);
         } else if (kind === "slot") {
@@ -400,12 +392,14 @@ export function domToVNode(
           const slotName = parts[3];
           const key = parts[4];
 
-          const vnode = h(ServerSlot, {
-            key: key === "" ? undefined : key,
-            id,
-            name: slotName,
-            children: [],
-          });
+          const vnode = (
+            <ServerSlot
+              key={key === "" ? undefined : key}
+              id={id}
+              name={slotName}
+              children={[]}
+            />
+          );
 
           const parentVNode = vnodeStack.at(-1)!;
           parentVNode.props[slotName] = vnode;
@@ -418,11 +412,13 @@ export function domToVNode(
           const mode = +parts[3] as PartialMode;
           const key = parts[4];
           // deno-lint-ignore no-explicit-any
-          let vnode: VNode<any> = h(PartialComp, {
-            name,
-            key: key === "" ? undefined : key,
-            mode,
-          });
+          let vnode: VNode<any> = (
+            <PartialComp
+              name={name}
+              key={key === "" ? undefined : key}
+              mode={mode}
+            />
+          );
           const parentVNode = vnodeStack.at(-1);
           if (parentVNode !== undefined) {
             addVNodeChild(parentVNode, vnode);
@@ -432,7 +428,7 @@ export function domToVNode(
             const active = ACTIVE_PARTIALS.get(name);
             if (active !== undefined) {
               copyOldChildren(vnode.props, active.props.children);
-              const wrapper = h(Fragment, null);
+              const wrapper = <></>;
               addVNodeChild(vnode, wrapper);
               vnode = wrapper;
             }
@@ -440,7 +436,7 @@ export function domToVNode(
             const active = ACTIVE_PARTIALS.get(name);
             if (active !== undefined) {
               copyOldChildren(vnode.props, active.props.children);
-              const wrapper = h(Fragment, null);
+              const wrapper = <></>;
               if (!vnode.props.children) {
                 vnode.props.children = [];
               }
@@ -459,7 +455,7 @@ export function domToVNode(
             sib = sib.nextSibling;
             current.remove();
           }
-          const vnode = h(Fragment, { key: parts[2] });
+          const vnode = <></>;
           addVNodeChild(vnodeStack.at(-1)!, vnode);
           vnodeStack.push(vnode);
           continue;

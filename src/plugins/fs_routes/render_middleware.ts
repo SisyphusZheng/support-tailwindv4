@@ -1,4 +1,4 @@
-import { type AnyComponent, h, type RenderableProps, type VNode } from "preact";
+import type { AnyComponent, RenderableProps, VNode } from "preact";
 import type { MiddlewareFn } from "../../middlewares/mod.ts";
 import type { HandlerFn, PageResponse } from "../../handlers.ts";
 import type { FreshReqContext, PageProps } from "../../context.ts";
@@ -112,8 +112,9 @@ export function renderMiddleware<State>(
         }
         vnode = result;
       } else {
+        const Component = components[i];
         // deno-lint-ignore no-explicit-any
-        vnode = h(components[i] as any, props) as VNode;
+        vnode = <Component {...props} /> as VNode;
       }
     }
 

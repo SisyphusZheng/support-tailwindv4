@@ -1,11 +1,9 @@
 import {
   type ComponentType,
   type FunctionComponent,
-  h,
   isValidElement,
   type VNode,
 } from "preact";
-import { renderToString } from "preact-render-to-string";
 import { SpanStatusCode } from "@opentelemetry/api";
 import type { ResolvedFreshConfig } from "./config.ts";
 import type { BuildCache } from "./build_cache.ts";
