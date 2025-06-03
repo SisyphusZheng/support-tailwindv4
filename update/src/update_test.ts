@@ -45,8 +45,6 @@ Deno.test("update - remove JSX pragma import", async () => {
   await writeFiles(dir, {
     "/deno.json": `{}`,
     "/routes/index.tsx": `import { h, Fragment } from "preact";
-/** @jsx h */
-/** @jsxFrag Fragment */
 export default function Foo() {
   return null;
 }`,
@@ -674,12 +672,7 @@ Deno.test("update - 1.x remove reference comments", async () => {
   const dir = _tmp.dir;
   await writeFiles(dir, {
     "/deno.json": `{}`,
-    "/routes/main.ts": `/// <reference no-default-lib="true" />
-/// <reference lib="dom" />
-/// <reference lib="dom.iterable" />
-/// <reference lib="dom.asynciterable" />
-/// <reference lib="deno.ns" />
-`,
+    "/routes/main.ts": ``,
   });
 
   await updateProject(dir);

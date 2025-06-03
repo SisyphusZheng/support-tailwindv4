@@ -1,6 +1,7 @@
 import * as path from "@std/path";
 import * as JSONC from "@std/jsonc";
 import * as tsmorph from "ts-morph";
+import * as colors from "@std/fmt/colors";
 
 export const SyntaxKind = tsmorph.ts.SyntaxKind;
 
@@ -16,47 +17,90 @@ export interface DenoJson {
   imports?: Record<string, string>;
 }
 
-async function format(filePath: string) {
+async function format(filePath: string, baseDir: string) {
   const command = new Deno.Command(Deno.execPath(), {
     args: ["fmt", filePath],
   });
-  await command.output();
-}
-
-async function writeFormatted(filePath: string, content: string) {
-  await Deno.writeTextFile(filePath, content);
-  await format(filePath);
+  const { code, stderr } = await command.output();
+  if (code !== 0) {
+    // deno-lint-ignore no-console
+    console.warn(
+      colors.yellow(
+        `    ⚠️  Warning: Failed to auto-format ${
+          colors.dim(path.relative(baseDir, filePath))
+        }. You may need to format it manually. Exit code: ${code}. Stderr: ${
+          new TextDecoder().decode(stderr)
+        }`,
+      ),
+    );
+  }
 }
 
 async function updateDenoJson(
   dir: string,
   fn: (json: DenoJson) => void | Promise<void>,
-): Promise<void> {
-  let filePath = path.join(dir, "deno.json");
+): Promise<{ updated: boolean; path: string | null }> {
+  let jsonPath = path.join(dir, "deno.json");
+  let content: string;
   try {
-    const config = JSON.parse(await Deno.readTextFile(filePath)) as DenoJson;
-    await fn(config);
-    await writeFormatted(filePath, JSON.stringify(config));
-    return;
+    content = await Deno.readTextFile(jsonPath);
   } catch (err) {
-    if (!(err instanceof Deno.errors.NotFound)) {
+    if (err instanceof Deno.errors.NotFound) {
+      jsonPath = path.join(dir, "deno.jsonc");
+      try {
+        content = await Deno.readTextFile(jsonPath);
+      } catch (err2) {
+        if (err2 instanceof Deno.errors.NotFound) {
+          // deno-lint-ignore no-console
+          console.log(
+            colors.gray(
+              `  No deno.json or deno.jsonc found in ${dir}. Skipping config update.`,
+            ),
+          );
+          return { updated: false, path: null };
+        }
+        throw err2;
+      }
+    } else {
       throw err;
     }
   }
 
-  filePath = path.join(dir, "deno.jsonc");
-  try {
-    const config = JSONC.parse(await Deno.readTextFile(filePath)) as DenoJson;
-    await fn(config);
-    await writeFormatted(filePath, JSON.stringify(config));
-    return;
-  } catch (err) {
-    if (!(err instanceof Deno.errors.NotFound)) {
-      throw err;
+  const relativeJsonPath = path.relative(dir, jsonPath);
+  // deno-lint-ignore no-console
+  console.log(
+    `  Reading configuration from ${colors.dim(relativeJsonPath)}...`,
+  );
+  const originalContent = content;
+  const json = JSONC.parse(content) as DenoJson;
+  await fn(json);
+
+  // Remove undefined keys that might have been set by 'delete' operations for cleaner JSON
+  for (const key in json) {
+    if (json[key as keyof DenoJson] === undefined) {
+      delete json[key as keyof DenoJson];
     }
   }
 
-  throw new Error(`Could not find deno.json or deno.jsonc in: ${dir}`);
+  const newContent = JSON.stringify(json, null, 2);
+
+  if (newContent !== originalContent.trim()) {
+    // deno-lint-ignore no-console
+    console.log(
+      colors.yellow(
+        `  Changes detected in ${
+          colors.dim(relativeJsonPath)
+        }. Writing updates...`,
+      ),
+    );
+    await Deno.writeTextFile(jsonPath, newContent + "\n");
+    return { updated: true, path: jsonPath };
+  }
+  // deno-lint-ignore no-console
+  console.log(
+    colors.gray(`  No changes required for ${colors.dim(relativeJsonPath)}.`),
+  );
+  return { updated: false, path: jsonPath };
 }
 
 export interface ImportState {
@@ -79,8 +123,11 @@ const compat = new Set([
 ]);
 
 export async function updateProject(dir: string) {
+  // deno-lint-ignore no-console
+  console.log(colors.bold("\n📋 Phase 1: Updating configuration files"));
+
   // Update config
-  await updateDenoJson(dir, (config) => {
+  const configResult = await updateDenoJson(dir, (config) => {
     if (config.imports !== null && typeof config.imports !== "object") {
       config.imports = {};
     }
@@ -127,28 +174,113 @@ export async function updateProject(dir: string) {
     }
   });
 
+  if (configResult.updated) {
+    // deno-lint-ignore no-console
+    console.log(colors.green("✓ Configuration updated successfully"));
+  } else {
+    // deno-lint-ignore no-console
+    console.log(colors.gray("✓ Configuration already up to date"));
+  }
+
+  // deno-lint-ignore no-console
+  console.log(colors.bold("\n🔄 Phase 2: Analyzing and updating source files"));
+
   // Update routes folder
   const project = new tsmorph.Project();
   const sfs = project.addSourceFilesAtPaths(
     path.join(dir, "**", "*.{js,jsx,ts,tsx}"),
   );
-  await Promise.all(sfs.map(async (sourceFile) => {
+
+  // deno-lint-ignore no-console
+  console.log(`  Found ${sfs.length} source files to process...`);
+
+  let processedCount = 0;
+  let modifiedCount = 0;
+
+  const results = await Promise.all(sfs.map(async (sourceFile) => {
     try {
-      return await updateFile(sourceFile);
+      const wasModified = await updateFile(sourceFile, dir);
+      processedCount++;
+      if (wasModified) {
+        modifiedCount++;
+      }
+      return {
+        success: true,
+        modified: wasModified,
+        path: sourceFile.getFilePath(),
+      };
     } catch (err) {
+      const filePath = sourceFile.getFilePath();
+      const relativePath = path.relative(dir, filePath);
       // deno-lint-ignore no-console
-      console.error(`Could not process ${sourceFile.getFilePath()}`);
-      throw err;
+      console.error(
+        colors.red(
+          `  ✗ Error processing ${colors.dim(relativePath)}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        ),
+      );
+      return { success: false, modified: false, path: filePath, error: err };
     }
   }));
+
+  // Summary of phase 2
+  const errors = results.filter((r) => !r.success);
+  if (errors.length > 0) {
+    // deno-lint-ignore no-console
+    console.log(
+      colors.yellow(
+        `\n⚠️  ${errors.length} files encountered errors during processing`,
+      ),
+    );
+    for (const error of errors) {
+      const relativePath = path.relative(dir, error.path);
+      // deno-lint-ignore no-console
+      console.log(colors.red(`  • ${relativePath}`));
+    }
+  }
+
+  // deno-lint-ignore no-console
+  console.log(
+    colors.green(
+      `\n✓ Phase 2 complete: ${modifiedCount} of ${processedCount} files were updated`,
+    ),
+  );
+
+  // deno-lint-ignore no-console
+  console.log(colors.bold("\n🎨 Phase 3: Formatting updated files"));
+  // Note: Individual files are already formatted by the updateFile function
+  // deno-lint-ignore no-console
+  console.log(colors.green("✓ All updated files have been formatted"));
+
+  return {
+    configUpdated: configResult.updated,
+    filesProcessed: processedCount,
+    filesModified: modifiedCount,
+    errors: errors.length,
+  };
 }
 
-async function updateFile(sourceFile: tsmorph.SourceFile): Promise<void> {
+async function updateFile(
+  sourceFile: tsmorph.SourceFile,
+  baseDir: string,
+): Promise<boolean> {
+  const filePath = sourceFile.getFilePath();
+  const relativePath = path.relative(baseDir, filePath);
+
+  // deno-lint-ignore no-console
+  console.log(`    Processing ${colors.dim(relativePath)}...`);
+
+  const originalText = sourceFile.getFullText();
+
   const newImports: ImportState = {
     core: new Set(),
     runtime: new Set(),
     compat: new Set(),
   };
+
+  // Track JSX imports that get removed
+  const removedJsxImports: string[] = [];
 
   const text = sourceFile.getFullText()
     .replaceAll("/** @jsx h */\n", "")
@@ -158,7 +290,10 @@ async function updateFile(sourceFile: tsmorph.SourceFile): Promise<void> {
     .replaceAll('/// <reference lib="dom.iterable" />\n', "")
     .replaceAll('/// <reference lib="dom.asynciterable" />\n', "")
     .replaceAll('/// <reference lib="deno.ns" />\n', "");
-  sourceFile.replaceWithText(text);
+
+  if (text !== originalText) {
+    sourceFile.replaceWithText(text);
+  }
 
   if (
     sourceFile.getFilePath().includes("/routes/") &&
@@ -258,12 +393,18 @@ async function updateFile(sourceFile: tsmorph.SourceFile): Promise<void> {
 
   let hasCoreImport = false;
   let hasRuntimeImport = false;
+  let modified = false;
+
   for (const d of sourceFile.getImportDeclarations()) {
     const specifier = d.getModuleSpecifierValue();
     if (specifier === "preact") {
       for (const n of d.getNamedImports()) {
         const name = n.getName();
-        if (name === "h" || name === "Fragment") n.remove();
+        if (name === "h" || name === "Fragment") {
+          removedJsxImports.push(name);
+          n.remove();
+          modified = true;
+        }
       }
 
       removeEmptyImport(d);
@@ -324,7 +465,35 @@ async function updateFile(sourceFile: tsmorph.SourceFile): Promise<void> {
   }
 
   await sourceFile.save();
-  await format(sourceFile.getFilePath());
+
+  // Check if the file was actually modified by comparing the saved content
+  const finalText = sourceFile.getFullText();
+  const wasModified = finalText !== originalText || modified;
+
+  if (wasModified) {
+    // deno-lint-ignore no-console
+    console.log(`    ${colors.green("✓")} Updated ${colors.dim(relativePath)}`);
+
+    // Log JSX imports that were removed
+    if (removedJsxImports.length > 0) {
+      // deno-lint-ignore no-console
+      console.log(
+        `      ${colors.gray("- Removed JSX imports:")} ${
+          colors.dim(removedJsxImports.join(", "))
+        }`,
+      );
+    }
+  } else {
+    // deno-lint-ignore no-console
+    console.log(
+      `    ${colors.gray("○")} No changes needed for ${
+        colors.dim(relativePath)
+      }`,
+    );
+  }
+
+  await format(sourceFile.getFilePath(), baseDir);
+  return wasModified;
 }
 
 function removeEmptyImport(d: tsmorph.ImportDeclaration) {
